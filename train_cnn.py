@@ -6,6 +6,9 @@ import torch.nn as nn
 import torch.optim as optim
 from models.cnn import EmotionCNN
 from utils.preprocessing import get_dataloaders
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
