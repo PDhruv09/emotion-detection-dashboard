@@ -39,18 +39,8 @@ from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 
 def get_dataloaders(data_dir='data/Images', batch_size=64):
-    train_transform = transforms.Compose([
-        transforms.Grayscale(),  # Convert to 1 channel
-        transforms.Resize((48, 48)),
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(10),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2),
-        transforms.ToTensor(),
-        transforms.Normalize((0.5,), (0.5,))
-    ])
-
-    val_transform = transforms.Compose([
-        transforms.Grayscale(),  # Convert to 1 channel
+    transform = transforms.Compose([
+        transforms.Grayscale(),
         transforms.Resize((48, 48)),
         transforms.ToTensor(),
         transforms.Normalize((0.5,), (0.5,))
