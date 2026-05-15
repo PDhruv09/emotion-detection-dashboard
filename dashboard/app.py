@@ -32,7 +32,7 @@ def load_data():
         transforms.ToTensor(),
         transforms.Normalize((0.5,), (0.5,))
     ])
-    test_dataset = datasets.ImageFolder("data/Images/validation", transform=transform)
+    test_dataset = datasets.ImageFolder("data/images/validation", transform=transform)
     test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
     return test_loader
 
