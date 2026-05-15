@@ -1,6 +1,5 @@
-# Local datasets and generated model artifacts
+# Local datasets
 data/
-saved_models/
 
 # Common data and model file formats
 *.csv
@@ -15,8 +14,6 @@ saved_models/
 *.xls
 *.feather
 *.h5
-*.pt
-*.pth
 *.onnx
 *.joblib
 
