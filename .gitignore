@@ -1,0 +1,31 @@
+# Local datasets and generated model artifacts
+data/
+saved_models/
+
+# Common data and model file formats
+*.csv
+*.tsv
+*.jsonl
+*.parquet
+*.pkl
+*.pickle
+*.sqlite
+*.db
+*.xlsx
+*.xls
+*.feather
+*.h5
+*.pt
+*.pth
+*.onnx
+*.joblib
+
+# Media datasets
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.wav
+*.mp3
+*.mp4
+*.avi
