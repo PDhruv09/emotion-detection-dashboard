@@ -1,6 +1,10 @@
 # Local datasets
 data/*
 
+# Python cache files
+__pycache__/
+*.pyc
+
 # Common data and model file formats
 *.csv
 *.tsv
