@@ -38,7 +38,7 @@ import os
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 
-def get_dataloaders(data_dir='data/Images', batch_size=64):
+def get_dataloaders(data_dir='data/images', batch_size=64):
     transform = transforms.Compose([
         transforms.Grayscale(),
         transforms.Resize((48, 48)),
