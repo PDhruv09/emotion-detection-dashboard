@@ -14,7 +14,12 @@ from models.cnn import EmotionCNN
 from models.landmark_mlp import LandmarkEmotionMLP
 from models.resnet import EmotionResNet
 from utils.visualize import plot_confusion_matrix, show_misclassified
-from utils.landmark_features import FACE_FEATURE_SIZE, create_face_mesh, extract_face_landmarks
+from utils.landmark_features import (
+    FACE_FEATURE_SIZE,
+    FACE_FEATURE_VERSION,
+    create_face_mesh,
+    extract_face_landmarks,
+)
 from sklearn.metrics import confusion_matrix
 
 st.set_page_config(page_title="Facial Emotion Dashboard", layout="wide")
@@ -61,8 +66,14 @@ def load_model(model_type):
             num_classes=len(checkpoint.get("class_names", class_names)),
             hidden_size=checkpoint.get("hidden_size", 256),
             dropout=checkpoint.get("dropout", 0.3),
+            num_layers=checkpoint.get("num_layers", 2),
+            architecture=checkpoint.get("architecture", "legacy"),
         ).to(device)
         model.load_state_dict(checkpoint["model_state_dict"])
+        model.feature_mean = checkpoint.get("feature_mean")
+        model.feature_std = checkpoint.get("feature_std")
+        model.feature_version = checkpoint.get("feature_version", "raw")
+        model.best_val_acc = checkpoint.get("best_val_acc", 0.0)
     model.eval()
     return model
 
@@ -74,8 +85,15 @@ def load_face_mesh():
 
 def predict_landmark_image(model, image_path):
     face_mesh = load_face_mesh()
-    feature_vector, detected = extract_face_landmarks(image_path, face_mesh)
+    feature_version = getattr(model, "feature_version", FACE_FEATURE_VERSION)
+    feature_vector, detected = extract_face_landmarks(
+        image_path, face_mesh, feature_version=feature_version
+    )
     features = torch.tensor(feature_vector, dtype=torch.float32).unsqueeze(0).to(device)
+    if hasattr(model, "feature_mean") and model.feature_mean is not None:
+        feature_mean = model.feature_mean.to(device).unsqueeze(0)
+        feature_std = model.feature_std.to(device).unsqueeze(0).clamp_min(1e-6)
+        features = (features - feature_mean) / feature_std
     with torch.no_grad():
         output = model(features)
         probs = torch.softmax(output, dim=1).cpu().numpy()[0]
@@ -217,7 +235,8 @@ else:
     # Display model performance chart
     st.markdown("<h2 style='margin-bottom:5px;'>📊 Model Accuracy Comparison</h2>", unsafe_allow_html=True)
     model_names = ["CNN", "ResNet", "MediaPipe"]
-    test_accuracies = [51.36, 58.65, 0.0]  # Replace MediaPipe after training
+    landmark_acc = getattr(model, "best_val_acc", 0.0) if model_choice == LANDMARK_MODEL else 0.0
+    test_accuracies = [51.36, 58.65, landmark_acc]
     fig2, ax2 = plt.subplots()
     ax2.bar(model_names, test_accuracies, color=["skyblue", "lightgreen", "lightcoral"])
     ax2.set_ylim(0, 100)
