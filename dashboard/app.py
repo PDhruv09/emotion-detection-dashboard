@@ -28,6 +28,7 @@ st.title("😊 Emotion Detection Model Dashboard")
 # Emotion class labels
 class_names = ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
 LANDMARK_MODEL = "MediaPipe Landmarks"
+PRECOMPUTED_LANDMARKS_PATH = "assets/validation_landmark_features.npz"
 
 # Device setup
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -46,6 +47,41 @@ def load_data():
     return test_loader
 
 test_loader = load_data()
+
+
+def normalized_repo_path(path):
+    return os.path.relpath(path, os.getcwd()).replace("\\", "/")
+
+
+@st.cache_data
+def load_precomputed_landmarks():
+    if not os.path.exists(PRECOMPUTED_LANDMARKS_PATH):
+        return {}
+
+    data = np.load(PRECOMPUTED_LANDMARKS_PATH, allow_pickle=True)
+    paths = data["paths"].tolist()
+    features = data["features"]
+    labels = data["labels"]
+    detected = data["detected"]
+
+    return {
+        path: {
+            "features": features[index],
+            "label": int(labels[index]),
+            "detected": bool(detected[index]),
+        }
+        for index, path in enumerate(paths)
+    }
+
+
+@st.cache_data
+def load_landmark_accuracy():
+    checkpoint_path = "saved_models/landmark_mlp.pth"
+    if not os.path.exists(checkpoint_path):
+        return 0.0
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    return float(checkpoint.get("best_val_acc", 0.0))
+
 
 # Load model
 @st.cache_resource
@@ -84,11 +120,17 @@ def load_face_mesh():
 
 
 def predict_landmark_image(model, image_path):
-    face_mesh = load_face_mesh()
-    feature_version = getattr(model, "feature_version", FACE_FEATURE_VERSION)
-    feature_vector, detected = extract_face_landmarks(
-        image_path, face_mesh, feature_version=feature_version
-    )
+    precomputed = load_precomputed_landmarks().get(normalized_repo_path(image_path))
+    if precomputed is not None:
+        feature_vector = precomputed["features"]
+        detected = precomputed["detected"]
+    else:
+        face_mesh = load_face_mesh()
+        feature_version = getattr(model, "feature_version", FACE_FEATURE_VERSION)
+        feature_vector, detected = extract_face_landmarks(
+            image_path, face_mesh, feature_version=feature_version
+        )
+
     features = torch.tensor(feature_vector, dtype=torch.float32).unsqueeze(0).to(device)
     if hasattr(model, "feature_mean") and model.feature_mean is not None:
         feature_mean = model.feature_mean.to(device).unsqueeze(0)
@@ -235,8 +277,7 @@ else:
     # Display model performance chart
     st.markdown("<h2 style='margin-bottom:5px;'>📊 Model Accuracy Comparison</h2>", unsafe_allow_html=True)
     model_names = ["CNN", "ResNet", "MediaPipe"]
-    landmark_acc = getattr(model, "best_val_acc", 0.0) if model_choice == LANDMARK_MODEL else 0.0
-    test_accuracies = [51.36, 58.65, landmark_acc]
+    test_accuracies = [51.36, 58.65, load_landmark_accuracy()]
     fig2, ax2 = plt.subplots()
     ax2.bar(model_names, test_accuracies, color=["skyblue", "lightgreen", "lightcoral"])
     ax2.set_ylim(0, 100)
