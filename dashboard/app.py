@@ -8,9 +8,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import sys
 import os
+from PIL import Image
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from models.cnn import EmotionCNN
+from models.fusion import FusionEmotionNet
 from models.landmark_mlp import LandmarkEmotionMLP
 from models.resnet import EmotionResNet
 from utils.visualize import plot_confusion_matrix, show_misclassified
@@ -28,6 +30,7 @@ st.title("😊 Emotion Detection Model Dashboard")
 # Emotion class labels
 class_names = ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
 LANDMARK_MODEL = "MediaPipe Landmarks"
+FUSION_MODEL = "MediaPipe Fusion"
 PRECOMPUTED_LANDMARKS_PATH = "assets/validation_landmark_features.npz"
 
 # Device setup
@@ -83,6 +86,15 @@ def load_landmark_accuracy():
     return float(checkpoint.get("best_val_acc", 0.0))
 
 
+@st.cache_data
+def load_fusion_accuracy():
+    checkpoint_path = "saved_models/fusion_emotion.pth"
+    if not os.path.exists(checkpoint_path):
+        return 0.0
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    return float(checkpoint.get("best_val_acc", 0.0))
+
+
 # Load model
 @st.cache_resource
 def load_model(model_type):
@@ -92,6 +104,26 @@ def load_model(model_type):
     elif model_type == "ResNet":
         model = EmotionResNet(num_classes=7).to(device)
         model.load_state_dict(torch.load("saved_models/resnet.pth", map_location=device))
+    elif model_type == FUSION_MODEL:
+        checkpoint_path = "saved_models/fusion_emotion.pth"
+        if not os.path.exists(checkpoint_path):
+            return None
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        model = FusionEmotionNet(
+            landmark_size=checkpoint.get("feature_size", FACE_FEATURE_SIZE),
+            num_classes=len(checkpoint.get("class_names", class_names)),
+            image_backbone=checkpoint.get("image_backbone", "efficientnet_b0"),
+            landmark_hidden=checkpoint.get("landmark_hidden", 256),
+            fusion_hidden=checkpoint.get("fusion_hidden", 512),
+            dropout=checkpoint.get("dropout", 0.35),
+            pretrained=False,
+        ).to(device)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        model.feature_mean = checkpoint.get("feature_mean")
+        model.feature_std = checkpoint.get("feature_std")
+        model.feature_version = checkpoint.get("feature_version", FACE_FEATURE_VERSION)
+        model.image_size = checkpoint.get("image_size", 224)
+        model.best_val_acc = checkpoint.get("best_val_acc", 0.0)
     else:
         checkpoint_path = "saved_models/landmark_mlp.pth"
         if not os.path.exists(checkpoint_path):
@@ -142,12 +174,48 @@ def predict_landmark_image(model, image_path):
     return probs, detected
 
 
-def evaluate_landmark_model(model, dataset):
+def fusion_image_transform(image_size):
+    return transforms.Compose([
+        transforms.Resize((image_size, image_size)),
+        transforms.ToTensor(),
+        transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+    ])
+
+
+def predict_fusion_image(model, image_path):
+    precomputed = load_precomputed_landmarks().get(normalized_repo_path(image_path))
+    if precomputed is not None:
+        feature_vector = precomputed["features"]
+        detected = precomputed["detected"]
+    else:
+        face_mesh = load_face_mesh()
+        feature_vector, detected = extract_face_landmarks(
+            image_path,
+            face_mesh,
+            feature_version=getattr(model, "feature_version", FACE_FEATURE_VERSION),
+        )
+
+    landmarks = torch.tensor(feature_vector, dtype=torch.float32).unsqueeze(0).to(device)
+    if hasattr(model, "feature_mean") and model.feature_mean is not None:
+        feature_mean = model.feature_mean.to(device).unsqueeze(0)
+        feature_std = model.feature_std.to(device).unsqueeze(0).clamp_min(1e-6)
+        landmarks = (landmarks - feature_mean) / feature_std
+
+    image = Image.open(image_path).convert("RGB")
+    transform = fusion_image_transform(getattr(model, "image_size", 224))
+    image_tensor = transform(image).unsqueeze(0).to(device)
+    with torch.no_grad():
+        output = model(image_tensor, landmarks)
+        probs = torch.softmax(output, dim=1).cpu().numpy()[0]
+    return probs, detected
+
+
+def evaluate_landmark_model(model, dataset, predict_fn=predict_landmark_image):
     preds, labels = [], []
     detected_count = 0
 
     for image_path, label in dataset.samples:
-        probs, detected = predict_landmark_image(model, image_path)
+        probs, detected = predict_fn(model, image_path)
         preds.append(int(np.argmax(probs)))
         labels.append(label)
         detected_count += int(detected)
@@ -155,8 +223,8 @@ def evaluate_landmark_model(model, dataset):
     return preds, labels, detected_count
 
 
-def plot_landmark_confusion_matrix(model, dataset):
-    preds, labels, detected_count = evaluate_landmark_model(model, dataset)
+def plot_landmark_confusion_matrix(model, dataset, predict_fn=predict_landmark_image):
+    preds, labels, detected_count = evaluate_landmark_model(model, dataset, predict_fn=predict_fn)
     cm = confusion_matrix(labels, preds, labels=list(range(len(class_names))))
     fig, ax = plt.subplots(figsize=(8, 6))
     import seaborn as sns
@@ -167,11 +235,11 @@ def plot_landmark_confusion_matrix(model, dataset):
     st.pyplot(fig)
 
 
-def show_landmark_misclassified(model, dataset, max_images=12):
+def show_landmark_misclassified(model, dataset, max_images=12, predict_fn=predict_landmark_image):
     misclassified = []
 
     for image_path, label in dataset.samples:
-        probs, detected = predict_landmark_image(model, image_path)
+        probs, detected = predict_fn(model, image_path)
         pred = int(np.argmax(probs))
         if pred != label:
             misclassified.append((image_path, pred, label, detected))
@@ -201,13 +269,13 @@ def show_landmark_misclassified(model, dataset, max_images=12):
     st.pyplot(fig)
 
 # Sidebar controls
-model_choice = st.sidebar.selectbox("Choose Model", ["CNN", "ResNet", LANDMARK_MODEL])
+model_choice = st.sidebar.selectbox("Choose Model", ["CNN", "ResNet", LANDMARK_MODEL, FUSION_MODEL])
 model = load_model(model_choice)
 
 if model is None:
     st.warning(
-        "The MediaPipe landmark model has not been trained yet. "
-        "Run `python train_landmark_mlp.py` to create `saved_models/landmark_mlp.pth`."
+        "This model checkpoint has not been trained yet. "
+        "Run the matching training script to create its file in `saved_models/`."
     )
     st.stop()
 
@@ -232,12 +300,16 @@ if st.session_state.show_cm:
     st.subheader(f"Confusion Matrix for {model_choice}")
     if model_choice == LANDMARK_MODEL:
         plot_landmark_confusion_matrix(model, test_loader.dataset)
+    elif model_choice == FUSION_MODEL:
+        plot_landmark_confusion_matrix(model, test_loader.dataset, predict_fn=predict_fusion_image)
     else:
         plot_confusion_matrix(model, test_loader, device, class_names)
 elif st.session_state.show_errors:
     st.subheader(f"Misclassified Images for {model_choice}")
     if model_choice == LANDMARK_MODEL:
         show_landmark_misclassified(model, test_loader.dataset)
+    elif model_choice == FUSION_MODEL:
+        show_landmark_misclassified(model, test_loader.dataset, predict_fn=predict_fusion_image)
     else:
         show_misclassified(model, test_loader, device, class_names)
 else:
@@ -254,6 +326,11 @@ else:
     if model_choice == LANDMARK_MODEL:
         image_path = dataset.samples[int(index)][0]
         probs, detected = predict_landmark_image(model, image_path)
+        if not detected:
+            st.warning("MediaPipe did not detect a face in this image, so the model used a zero landmark vector.")
+    elif model_choice == FUSION_MODEL:
+        image_path = dataset.samples[int(index)][0]
+        probs, detected = predict_fusion_image(model, image_path)
         if not detected:
             st.warning("MediaPipe did not detect a face in this image, so the model used a zero landmark vector.")
     else:
@@ -276,10 +353,10 @@ else:
 
     # Display model performance chart
     st.markdown("<h2 style='margin-bottom:5px;'>📊 Model Accuracy Comparison</h2>", unsafe_allow_html=True)
-    model_names = ["CNN", "ResNet", "MediaPipe"]
-    test_accuracies = [51.36, 58.65, load_landmark_accuracy()]
+    model_names = ["CNN", "ResNet", "MediaPipe", "Fusion"]
+    test_accuracies = [51.36, 58.65, load_landmark_accuracy(), load_fusion_accuracy()]
     fig2, ax2 = plt.subplots()
-    ax2.bar(model_names, test_accuracies, color=["skyblue", "lightgreen", "lightcoral"])
+    ax2.bar(model_names, test_accuracies, color=["skyblue", "lightgreen", "lightcoral", "plum"])
     ax2.set_ylim(0, 100)
     ax2.set_ylabel("Test Accuracy (%)")
     st.pyplot(fig2)
