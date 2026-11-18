@@ -10,9 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2
 RUN useradd -m app
 WORKDIR /app
 
-COPY requirements.txt .
-RUN uv pip install --system --no-cache --index-url https://download.pytorch.org/whl/cpu torch torchvision \
- && uv pip install --system --no-cache -r requirements.txt mediapipe opencv-python-headless
+COPY requirements.lock .
+RUN uv pip install --system --no-cache --index-url https://download.pytorch.org/whl/cpu torch==2.15.0+cpu torchvision==0.29.2+cpu \
+ && uv pip install --system --no-cache -r requirements.lock
 
 COPY --chown=app:app . .
 USER app
